@@ -49,6 +49,13 @@ jobs:
         working-directory: nihongo_v7
         run: flutter pub get
 
+      # ── 5b. Regenerate missing Android wrapper files (gradlew, gradle/) ──────
+      # The repo was created without committing the gradle wrapper. This command
+      # re-creates only the missing files without touching existing source code.
+      - name: Ensure Android wrapper files exist
+        working-directory: nihongo_v7
+        run: flutter create --platforms android . --project-name nihongo_v7
+
       # ── 6. Analyze (lint) ────────────────────────────────────────────────────
       - name: Run Flutter analyze
         working-directory: nihongo_v7
@@ -67,9 +74,18 @@ jobs:
           fi
 
       # ── 8. Make gradlew executable ───────────────────────────────────────────
+      # FIX: gradlew is not committed to the repo. Running `flutter build apk`
+      # generates it automatically, so we let Flutter drive the full build
+      # (steps 9 & 10 below) rather than touching gradlew directly.
+      # The chmod step is kept as a no-op guard in case the file is later added.
       - name: Make gradlew executable
         working-directory: nihongo_v7/android
-        run: chmod +x gradlew
+        run: |
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+          else
+            echo "gradlew not present — Flutter will generate it during build."
+          fi
 
       # ── 9. Build debug APK ───────────────────────────────────────────────────
       - name: Build debug APK
