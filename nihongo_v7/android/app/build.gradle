@@ -8,14 +8,12 @@ android {
 
     namespace 'com.example.nihongolens'
 
-    // FIX 1: compileSdk must use the integer form (not compileSdkVersion) for AGP 8+
     compileSdk 34
 
     defaultConfig {
 
         applicationId "com.example.nihongolens"
 
-        // FIX 2: use minSdk / targetSdk (not the deprecated *Version form)
         minSdk 24
 
         targetSdk 34
@@ -40,18 +38,16 @@ android {
     }
 
     compileOptions {
-
-        sourceCompatibility JavaVersion.VERSION_17
-
-        targetCompatibility JavaVersion.VERSION_17
+        // FIX: must be Java 11, not 17 — Flutter 3.22's Kotlin plugin targets JVM 11.
+        // Mismatching this caused "binary metadata is 1.9.0, expected 1.7.1" errors.
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        // FIX 3: must match compileOptions above — Java 11 bytecode with JDK 17
-        jvmTarget = '17'
+        jvmTarget = '11'
     }
 
-    // FIX 4: packaging block avoids "More than one file was found" duplicate-file errors
     packagingOptions {
         resources {
             excludes += [
@@ -71,8 +67,11 @@ flutter {
 
 dependencies {
 
-    // FIX 5: align Kotlin stdlib with the kotlin-android plugin version (1.9.x for Flutter 3.22+)
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
+    // FIX: kotlin-stdlib version MUST match the Kotlin plugin version Flutter injects.
+    // Flutter 3.22 uses Kotlin 1.7.10 via its Gradle plugin.
+    // The previous 1.9.22 caused "incompatible metadata version: is 1.9.0, expected 1.7.1".
+    // Use kotlin-stdlib-jdk8 (the JDK8 variant) which is what Android projects expect.
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.7.10"
 
     implementation 'androidx.multidex:multidex:2.0.1'
 
@@ -80,6 +79,7 @@ dependencies {
 
     implementation 'com.google.mlkit:language-id:17.0.4'
 
-    // FIX 6: Core KTX required by FlutterActivity on API 34
-    implementation 'androidx.core:core-ktx:1.13.1'
+    // Downgraded to 1.12.0 — 1.13.x requires compileSdk 34 with AGP 8+,
+    // which can conflict when the Kotlin version is pinned to 1.7.x.
+    implementation 'androidx.core:core-ktx:1.12.0'
 }
