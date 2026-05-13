@@ -172,9 +172,9 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 24),
 
-              // FIX 3 (line 166): the TextStyle literal is fully const
-              Text('Translate to',
-                  style: const TextStyle(color: Colors.white60, fontSize: 13)),
+              // FIX 3 (line 176): Text + style are both compile-time constants → const Text
+              const Text('Translate to',
+                  style: TextStyle(color: Colors.white60, fontSize: 13)),
               const SizedBox(height: 8),
               Row(
                 children: [
