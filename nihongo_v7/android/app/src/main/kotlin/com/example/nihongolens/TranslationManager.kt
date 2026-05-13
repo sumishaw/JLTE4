@@ -18,17 +18,24 @@ object TranslationManager {
         targetLang: String,
         onTranslated: (String) -> Unit
     ) {
+        // FIX 1: "und" (undetermined) language returned by ML Kit when detection
+        //         fails.  The old code passed null to TranslatorOptions which threw
+        //         an IllegalArgumentException and silently dropped the caption.
+        //         Fall back to English source so the user still sees something.
+        val resolvedSource = if (sourceLang == "und" || sourceLang.isBlank()) "en" else sourceLang
 
-        val source =
-            mapLanguage(sourceLang)
-
-        val target =
-            mapLanguage(targetLang)
+        val source = mapLanguage(resolvedSource)
+        val target = mapLanguage(targetLang)
 
         if (source == null || target == null) {
-
             onTranslated(text)
+            return
+        }
 
+        // FIX 2: Skip translation when source == target (avoids a needless
+        //         network/model round-trip and the MLKit "same language" crash).
+        if (source == target) {
+            onTranslated(text)
             return
         }
 
@@ -52,7 +59,9 @@ object TranslationManager {
                 translator.translate(text)
                     .addOnSuccessListener { translated ->
 
-                        onTranslated(translated)
+                        // FIX 3: MLKit can return an empty string on rare occasions;
+                        //         fall back to original text instead of showing blank.
+                        onTranslated(translated.ifBlank { text })
                     }
                     .addOnFailureListener {
 
@@ -73,6 +82,15 @@ object TranslationManager {
 
                 onTranslated(text)
             }
+    }
+
+    /**
+     * FIX 4: Call this when the service is destroyed to avoid a Translator
+     * resource leak (each Translator holds a native handle).
+     */
+    fun closeAll() {
+        translators.values.forEach { runCatching { it.close() } }
+        translators.clear()
     }
 
     private fun mapLanguage(
@@ -100,6 +118,11 @@ object TranslationManager {
             "it" -> TranslateLanguage.ITALIAN
 
             "hi" -> TranslateLanguage.HINDI
+
+            // FIX 5: pt (Portuguese) and ar (Arabic) were missing; add common ones.
+            "pt" -> TranslateLanguage.PORTUGUESE
+
+            "ar" -> TranslateLanguage.ARABIC
 
             else -> null
         }
