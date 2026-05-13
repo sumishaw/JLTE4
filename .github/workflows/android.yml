@@ -55,9 +55,16 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       # ── 7. Unit tests ────────────────────────────────────────────────────────
+      # Guard: flutter test exits with code 1 when the test/ directory is absent.
+      # This check runs tests when the directory exists, skips cleanly otherwise.
       - name: Run Flutter tests
         working-directory: nihongo_v7
-        run: flutter test --no-pub
+        run: |
+          if [ -d "test" ] && [ "$(ls -A test)" ]; then
+            flutter test --no-pub
+          else
+            echo "No test directory found — skipping flutter test."
+          fi
 
       # ── 8. Make gradlew executable ───────────────────────────────────────────
       - name: Make gradlew executable
