@@ -34,11 +34,11 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   static const _channel = MethodChannel('overlay_channel');
 
-  bool _overlayPermission  = false;
-  bool _accessibilityOn    = false;
-  bool _overlayRunning     = false;
-  String _latestCaption    = 'Waiting for captions…';
-  String _targetLang       = 'hindi';   // 'english' or 'hindi'
+  bool _overlayPermission = false;
+  bool _accessibilityOn   = false;
+  bool _overlayRunning    = false;
+  String _latestCaption   = 'Waiting for captions…';
+  String _targetLang      = 'hindi'; // 'english' or 'hindi'
 
   Timer? _captionPoller;
 
@@ -57,8 +57,10 @@ class _HomePageState extends State<HomePage> {
 
   // ── permissions ───────────────────────────────────────────────────────────
   Future<void> _checkPermissions() async {
-    final overlay       = await _channel.invokeMethod<bool>('hasOverlayPermission')      ?? false;
-    final accessibility = await _channel.invokeMethod<bool>('checkAccessibilityEnabled') ?? false;
+    final overlay =
+        await _channel.invokeMethod<bool>('hasOverlayPermission') ?? false;
+    final accessibility =
+        await _channel.invokeMethod<bool>('checkAccessibilityEnabled') ?? false;
     if (mounted) {
       setState(() {
         _overlayPermission = overlay;
@@ -101,9 +103,11 @@ class _HomePageState extends State<HomePage> {
 
   // ── caption polling ───────────────────────────────────────────────────────
   void _startPoller() {
-    _captionPoller = Timer.periodic(const Duration(milliseconds: 300), (_) async {
+    _captionPoller =
+        Timer.periodic(const Duration(milliseconds: 300), (_) async {
       try {
-        final text = await _channel.invokeMethod<String>('getLatestTranslation');
+        final text =
+            await _channel.invokeMethod<String>('getLatestTranslation');
         if (text != null && text != _latestCaption && mounted) {
           setState(() => _latestCaption = text);
         }
@@ -111,8 +115,8 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  void _showSnack(String msg) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _showSnack(String msg) => ScaffoldMessenger.of(context)
+      .showSnackBar(SnackBar(content: Text(msg)));
 
   // ── UI ────────────────────────────────────────────────────────────────────
   @override
@@ -124,26 +128,32 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
-              Row(
+
+              // FIX 1 (line 128): Row + Column children are all compile-time
+              // constants → hoist const to the Row level.
+              const Row(
                 children: [
-                  const Text('🌐', style: TextStyle(fontSize: 28)),
-                  const SizedBox(width: 10),
+                  Text('🌐', style: TextStyle(fontSize: 28)),
+                  SizedBox(width: 10),
+                  // FIX 2 (line 129): Column with only const children → const
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text('Caption Translator',
-                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold,
+                          style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
                               color: Colors.white)),
                       Text('Live overlay · English & Hindi',
-                          style: TextStyle(fontSize: 12, color: Colors.white54)),
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.white54)),
                     ],
                   ),
                 ],
               ),
               const SizedBox(height: 24),
 
-              // Permission cards
+              // _PermCard receives runtime values → cannot use const at call-site
               _PermCard(
                 icon: Icons.layers,
                 title: 'Overlay Permission',
@@ -162,22 +172,28 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 24),
 
-              // Language selector
-              Text('Translate to', style: TextStyle(color: Colors.white60, fontSize: 13)),
+              // FIX 3 (line 166): the TextStyle literal is fully const
+              Text('Translate to',
+                  style: const TextStyle(color: Colors.white60, fontSize: 13)),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  _LangChip(label: '🇬🇧 English', value: 'english',
-                      selected: _targetLang == 'english', onTap: _setLanguage),
+                  _LangChip(
+                      label: '🇬🇧 English',
+                      value: 'english',
+                      selected: _targetLang == 'english',
+                      onTap: _setLanguage),
                   const SizedBox(width: 10),
-                  _LangChip(label: '🇮🇳 Hindi', value: 'hindi',
-                      selected: _targetLang == 'hindi',  onTap: _setLanguage),
+                  _LangChip(
+                      label: '🇮🇳 Hindi',
+                      value: 'hindi',
+                      selected: _targetLang == 'hindi',
+                      onTap: _setLanguage),
                 ],
               ),
 
               const SizedBox(height: 24),
 
-              // Start / Stop button
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -189,10 +205,12 @@ class _HomePageState extends State<HomePage> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(14)),
                   ),
-                  icon: Icon(_overlayRunning ? Icons.stop : Icons.play_arrow),
+                  icon: Icon(
+                      _overlayRunning ? Icons.stop : Icons.play_arrow),
                   label: Text(
                     _overlayRunning ? 'Stop Overlay' : 'Start Overlay',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   onPressed: _toggleOverlay,
                 ),
@@ -200,7 +218,6 @@ class _HomePageState extends State<HomePage> {
 
               const SizedBox(height: 24),
 
-              // Live caption preview
               Expanded(
                 child: Container(
                   width: double.infinity,
@@ -213,9 +230,11 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Live Caption Preview',
+                      // FIX 4 (line 216): Text widget + fully-const TextStyle → const
+                      const Text('Live Caption Preview',
                           style: TextStyle(
-                              color: Colors.white38, fontSize: 11,
+                              color: Colors.white38,
+                              fontSize: 11,
                               letterSpacing: 1.2)),
                       const SizedBox(height: 12),
                       Expanded(
@@ -237,7 +256,8 @@ class _HomePageState extends State<HomePage> {
               ),
 
               const SizedBox(height: 12),
-              Center(
+              // FIX 5 (line 291): Center > Text with a fully-const style → const
+              const Center(
                 child: Text(
                   'Overlay is transparent & always on top',
                   style: TextStyle(color: Colors.white24, fontSize: 11),
@@ -260,8 +280,11 @@ class _PermCard extends StatelessWidget {
   final VoidCallback onTap;
 
   const _PermCard({
-    required this.icon, required this.title, required this.subtitle,
-    required this.granted, required this.onTap,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.granted,
+    required this.onTap,
   });
 
   @override
@@ -276,25 +299,32 @@ class _PermCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
             children: [
-              Icon(icon, color: granted ? Colors.greenAccent : Colors.white38, size: 22),
+              Icon(icon,
+                  color: granted ? Colors.greenAccent : Colors.white38,
+                  size: 22),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // FIX 6 (line 240): TextStyle is fully const
                     Text(title,
-                        style: TextStyle(
+                        style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w600,
                             fontSize: 14)),
+                    // FIX 7 (line 241): TextStyle is fully const
                     Text(subtitle,
-                        style: TextStyle(color: Colors.white38, fontSize: 12)),
+                        style: const TextStyle(
+                            color: Colors.white38, fontSize: 12)),
                   ],
                 ),
               ),
               granted
-                  ? const Icon(Icons.check_circle, color: Colors.greenAccent, size: 20)
-                  : const Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                  ? const Icon(Icons.check_circle,
+                      color: Colors.greenAccent, size: 20)
+                  : const Icon(Icons.chevron_right,
+                      color: Colors.white38, size: 20),
             ],
           ),
         ),
@@ -309,8 +339,10 @@ class _LangChip extends StatelessWidget {
   final void Function(String) onTap;
 
   const _LangChip({
-    required this.label, required this.value,
-    required this.selected, required this.onTap,
+    required this.label,
+    required this.value,
+    required this.selected,
+    required this.onTap,
   });
 
   @override
@@ -321,15 +353,23 @@ class _LangChip extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFFF3B3B) : const Color(0xFF1E1E1E),
+          color: selected
+              ? const Color(0xFFFF3B3B)
+              : const Color(0xFF1E1E1E),
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-              color: selected ? const Color(0xFFFF3B3B) : Colors.white12),
+              color: selected
+                  ? const Color(0xFFFF3B3B)
+                  : Colors.white12),
         ),
+        // FIX 8 (lines 286 & 291): color/fontWeight depend on `selected`
+        // (a runtime value) so the TextStyle cannot itself be const —
+        // that is intentional and correct. fontSize: 14 is fine as-is.
         child: Text(label,
             style: TextStyle(
                 color: selected ? Colors.white : Colors.white54,
-                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                fontWeight:
+                    selected ? FontWeight.bold : FontWeight.normal,
                 fontSize: 14)),
       ),
     );
