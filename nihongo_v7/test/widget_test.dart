@@ -3,7 +3,7 @@
 // Minimal smoke test — verifies the app builds and the root widget renders
 // without throwing. Add feature-specific tests alongside this file.
 
-import 'package:flutter/material.dart';
+// FIX: removed unused 'package:flutter/material.dart' import (caused warning → exit 1)
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nihongo_v7/main.dart';
 
