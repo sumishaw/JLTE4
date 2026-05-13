@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.*
 import android.util.TypedValue
 import android.view.*
@@ -18,9 +19,9 @@ class OverlayService : Service() {
         const val CHANNEL_ID = "nihongo_overlay"
         const val NOTIF_ID   = 1
 
+        @Volatile var latestOriginal = ""
         @Volatile var latestEnglish  = "Waiting for captions…"
         @Volatile var latestHindi    = ""
-        @Volatile var latestOriginal = ""
 
         fun updateText(original: String, english: String, hindi: String = "") {
             latestOriginal = original
@@ -29,22 +30,22 @@ class OverlayService : Service() {
         }
     }
 
-    private var windowManager: WindowManager?              = null
-    private var overlayView:   View?                       = null
-    private var originalTv:    TextView?                   = null  // dim top row: original text
-    private var translatedTv:  TextView?                   = null  // bright bottom row: translation
-    private var params:        WindowManager.LayoutParams? = null
-
+    private var windowManager: WindowManager? = null
+    private var overlayView:   View?           = null
+    private var originalTv:    TextView?        = null
+    private var translatedTv:  TextView?        = null
     private val handler = Handler(Looper.getMainLooper())
+    private var params:  WindowManager.LayoutParams? = null
+
     @Volatile private var running   = true
     @Volatile private var viewAdded = false
-
     private var lastDisplayedKey = ""
 
-    private fun dp(v: Float) = TypedValue.applyDimension(
-        TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
+    private fun dp(v: Int) = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
 
-    // ── lifecycle ─────────────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -67,65 +68,98 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    // ── overlay construction ──────────────────────────────────────────────────
+    // ── Overlay construction ──────────────────────────────────────────────────
+
     private fun buildOverlay() {
         try {
-            val root = LinearLayout(this).apply {
+            // Card with dark background + red border (matches working app style)
+            val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                gravity     = Gravity.CENTER_HORIZONTAL
-                setPadding(dp(14f).toInt(), dp(8f).toInt(), dp(14f).toInt(), dp(8f).toInt())
+                setPadding(dp(14), dp(10), dp(14), dp(12))
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(235, 0, 0, 0))
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(2), Color.argb(220, 255, 59, 59))
+                }
             }
 
-            fun makeTextView(sizeSp: Float, alphaVal: Float, color: Int) =
-                TextView(this).apply {
-                    setTextColor(color)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-                    typeface  = Typeface.DEFAULT_BOLD
-                    setShadowLayer(dp(4f), 0f, dp(2f), Color.BLACK)
-                    alpha     = alphaVal
-                    setLineSpacing(0f, 1.2f)
-                    gravity   = Gravity.CENTER_HORIZONTAL
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { setMargins(0, 0, 0, dp(4f).toInt()) }
-                }
+            // Header row: label + close button
+            val topRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topRow.addView(TextView(this).apply {
+                text = "🌐 Caption Lens"
+                setTextColor(Color.argb(180, 255, 255, 255))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            topRow.addView(TextView(this).apply {
+                text = "  ✕  "
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setOnClickListener { stopSelf() }
+            })
 
-            originalTv   = makeTextView(13f, 0.50f, Color.WHITE)  // original speech, dim
-            translatedTv = makeTextView(22f, 1.00f, Color.WHITE)  // translated, bright
+            // Divider
+            val divider = View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                ).also { it.setMargins(0, dp(5), 0, dp(7)) }
+                setBackgroundColor(Color.argb(150, 255, 59, 59))
+            }
 
-            root.addView(originalTv)
-            root.addView(translatedTv)
-            overlayView = root
+            // Original text row (dim, small — shows source language text)
+            originalTv = TextView(this).apply {
+                text = ""
+                setTextColor(Color.argb(150, 180, 180, 255))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { it.setMargins(0, 0, 0, dp(4)) }
+            }
 
-            val wType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+            // Translated text row (bright, large — English or Hindi)
+            translatedTv = TextView(this).apply {
+                text = "Waiting for captions…"
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                typeface = Typeface.DEFAULT_BOLD
+                setLineSpacing(0f, 1.3f)
+            }
 
-            val screenW = resources.displayMetrics.widthPixels
+            card.addView(topRow)
+            card.addView(divider)
+            card.addView(originalTv)
+            card.addView(translatedTv)
+            overlayView = card
+
+            val screenWidth = resources.displayMetrics.widthPixels
             params = WindowManager.LayoutParams(
-                (screenW * 0.92).toInt(),
+                (screenWidth * 0.95).toInt(),
                 WindowManager.LayoutParams.WRAP_CONTENT,
-                wType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE    or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL  or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-                PixelFormat.TRANSPARENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = dp(80f).toInt()
+                y = dp(80)
             }
 
+            // Draggable
             var sx = 0f; var sy = 0f; var ix = 0; var iy = 0
-            root.setOnTouchListener { _, ev ->
+            card.setOnTouchListener { _, ev ->
                 val p = params ?: return@setOnTouchListener false
                 when (ev.action) {
                     MotionEvent.ACTION_DOWN -> {
                         sx = ev.rawX; sy = ev.rawY
                         ix = p.x;    iy = p.y
-                        true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         p.x = ix + (ev.rawX - sx).toInt()
@@ -134,10 +168,9 @@ class OverlayService : Service() {
                             try { windowManager?.updateViewLayout(overlayView, p) }
                             catch (_: Exception) {}
                         }
-                        true
                     }
-                    else -> false
                 }
+                true
             }
 
             windowManager?.addView(overlayView, params)
@@ -147,31 +180,25 @@ class OverlayService : Service() {
         }
     }
 
-    // ── update loop ───────────────────────────────────────────────────────────
-    // Reads the correct translation field based on what was populated:
-    // - Hindi mode  → latestHindi is non-blank → show Hindi in big row
-    // - English mode → latestHindi is blank    → show English in big row
-    // - Top dim row always shows the original caption text (any language)
+    // ── Update loop ───────────────────────────────────────────────────────────
+
     private fun startUpdateLoop() {
         Thread {
             while (running) {
                 try {
-                    Thread.sleep(50)
+                    Thread.sleep(200)
+                    val original   = latestOriginal
+                    val english    = latestEnglish
+                    val hindi      = latestHindi
 
-                    val original = latestOriginal
-                    val english  = latestEnglish
-                    val hindi    = latestHindi
-
-                    // Prefer Hindi when available (user chose Hindi mode)
+                    // Show Hindi if available (user chose Hindi mode), else English
                     val translated = if (hindi.isNotBlank()) hindi else english
-
                     val key = "$original|$translated"
+
                     if (key == lastDisplayedKey) continue
                     if (translated.isBlank() || translated == "Waiting for captions…") continue
                     lastDisplayedKey = key
 
-                    // Only show the original dim row when the original differs from
-                    // the translation (i.e. it was actually translated, not passed through)
                     val showOriginal = original.isNotBlank() && original != translated
 
                     handler.post {
@@ -181,24 +208,24 @@ class OverlayService : Service() {
                         }
                         translatedTv?.apply {
                             text = translated
-                            startAnimation(AlphaAnimation(0.15f, 1f).apply {
-                                duration  = 150
+                            startAnimation(AlphaAnimation(0.3f, 1f).apply {
+                                duration  = 300
                                 fillAfter = true
                             })
                         }
                     }
                 } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    break
+                    Thread.currentThread().interrupt(); break
                 } catch (_: Exception) {}
             }
         }.also { it.isDaemon = true; it.name = "overlay-update" }.start()
     }
 
-    // ── notification ──────────────────────────────────────────────────────────
+    // ── Notification ──────────────────────────────────────────────────────────
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel(CHANNEL_ID, "Caption Translator Overlay",
+            NotificationChannel(CHANNEL_ID, "Caption Lens Overlay",
                 NotificationManager.IMPORTANCE_LOW)
                 .apply { setShowBadge(false) }
                 .also { getSystemService(NotificationManager::class.java)
@@ -208,8 +235,8 @@ class OverlayService : Service() {
 
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Caption Translator Active")
-            .setContentText("Works with any app — YouTube, VLC, Chrome, and more")
+            .setContentTitle("Caption Lens Active")
+            .setContentText("Translating captions from any app")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
             .setSilent(true)
