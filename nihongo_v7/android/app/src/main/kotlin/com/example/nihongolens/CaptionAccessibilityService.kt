@@ -7,214 +7,322 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import java.util.LinkedHashSet
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.Translator
+import com.google.mlkit.nl.translate.TranslatorOptions
+import java.util.concurrent.ConcurrentHashMap
 
-/**
- * CaptionAccessibilityService
- *
- * HOW ANDROID LIVE CAPTION WORKS
- * ──────────────────────────────
- * Android Live Caption is an OS-level feature that captures audio via the
- * system mixer — it works for ALL apps (YouTube, VLC, Chrome, any browser,
- * any media player, phone calls, etc.) without needing to know which app is
- * playing. The Live Caption UI is rendered by Android System Intelligence
- * (package: com.google.android.as) as a floating overlay window.
- *
- * WHAT WAS WRONG BEFORE
- * ─────────────────────
- * The old code filtered events by media app package names (youtube, vlc, …).
- * This was doubly wrong:
- *   1. Live Caption events come from com.google.android.as, NOT from the media
- *      app — so the filter dropped every real Live Caption event.
- *   2. The filter accidentally matched the media app's own CC/subtitle nodes
- *      instead of the Live Caption overlay, so it read YouTube's own subtitles
- *      rather than Android's speech-recognition captions.
- *
- * THE FIX
- * ───────
- * Listen only to com.google.android.as (and known OEM variants). This
- * automatically covers every app the user might play audio from — now and in
- * the future — with no hardcoded app list needed.
- *
- * TRANSLATION VARIABLE BUG
- * ────────────────────────
- * In Hindi mode the old code wrote hindiText to latestEnglish and vice-versa,
- * so the overlay showed the wrong language. Fixed by using updateText() cleanly.
- */
 class CaptionAccessibilityService : AccessibilityService() {
 
     companion object {
-        @Volatile var latestTranslatedText = "Waiting for captions…"
-        @Volatile var targetLanguage       = "hindi" // "english" or "hindi"
+        @Volatile var latestOriginal = ""
+        @Volatile var latestEnglish  = ""
+        @Volatile var latestHindi    = ""
+        @Volatile var targetLanguage = "english" // "english" or "hindi"
+        var instance: CaptionAccessibilityService? = null
 
-        // Live Caption is rendered by Android System Intelligence on stock Android.
-        // OEM variants (Samsung, Xiaomi, etc.) use their own packages listed below.
-        // We match by substring so minor version-suffix changes don't break anything.
-        private val LIVE_CAPTION_PACKAGES = listOf(
-            "com.google.android.as",                       // Pixel / stock Android 10+
-            "com.google.android.accessibility.captions",  // older AOSP builds
-            "com.samsung.android.bixby.service",          // Samsung Live Transcribe
-            "com.samsung.android.accessibility",           // Samsung alt
-            "com.miui.voiceassist",                       // Xiaomi
-            "com.huawei.accessibility"                    // Huawei
+        // Supported source languages — detected automatically from caption text.
+        // Maps MLKit language code → TranslateLanguage constant.
+        val SUPPORTED_LANGUAGES = mapOf(
+            "ja" to TranslateLanguage.JAPANESE,
+            "zh" to TranslateLanguage.CHINESE,
+            "ko" to TranslateLanguage.KOREAN,
+            "fr" to TranslateLanguage.FRENCH,
+            "de" to TranslateLanguage.GERMAN,
+            "es" to TranslateLanguage.SPANISH,
+            "tr" to TranslateLanguage.TURKISH,
+            "en" to TranslateLanguage.ENGLISH
+        )
+
+        // Exact view IDs for Live Caption and major apps across devices/OEMs.
+        // Strategy 1 (fastest): search by these IDs before doing a full tree scan.
+        private val CAPTION_VIEW_IDS = listOf(
+            "com.google.android.as:id/caption_text",           // Pixel Live Caption
+            "com.google.android.as:id/text",
+            "com.google.android.captioning:id/caption_text",   // AOSP captioning
+            "com.samsung.android.bixby.agent:id/text_view",    // Samsung Live Caption
+            "com.sec.android.accessibility.DigitalWellbeing:id/caption",
+            "org.videolan.vlc:id/player_overlay_subtitles",    // VLC
+            "org.videolan.vlc:id/subtitles",
+            "com.google.android.youtube:id/caption_window_text",
+            "com.google.android.youtube:id/subtitle_text",
+            "com.google.android.youtube:id/player_caption_text",
+            "com.android.chrome:id/caption_text",              // Chrome
+            "org.mozilla.firefox:id/caption_text",             // Firefox
+            "com.brave.browser:id/caption_text",               // Brave
+            "com.microsoft.emmx:id/caption_text",              // Edge
+            "com.netflix.mediaclient:id/subtitle_text",        // Netflix
+            "com.amazon.avod.thirdpartyclient:id/subtitle_text" // Prime Video
         )
     }
 
-    private val handler          = Handler(Looper.getMainLooper())
-    private var lastCaption      = ""
-    private var pendingText      = ""
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastCaptionText  = ""
+    private var debounceRunnable: Runnable? = null
 
-    private val debounceRunnable = Runnable {
-        try { processCaption(pendingText) }
-        catch (e: Exception) { Log.e("CaptionService", "debounce error: ${e.message}") }
-    }
+    // Cache translators by "srcLang_tgtLang" key to avoid rebuilding
+    private val translatorCache = ConcurrentHashMap<String, Translator>()
 
-    // ── service setup ─────────────────────────────────────────────────────────
+    // MLKit language identifier
+    private val langIdentifier = LanguageIdentification.getClient()
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        try {
-            serviceInfo = AccessibilityServiceInfo().apply {
-                eventTypes =
-                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED       or
-                    AccessibilityEvent.TYPE_WINDOWS_CHANGED
-                feedbackType        = AccessibilityServiceInfo.FEEDBACK_GENERIC
-                flags               = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                                      AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-                notificationTimeout = 30
-                // packageNames intentionally NOT set — we filter manually below.
-                // Setting packageNames would restrict events to only those packages
-                // and would miss OEM Live Caption variants not in the list.
-            }
-            Log.d("CaptionService", "Connected — watching Android Live Caption (ASI)")
-        } catch (e: Exception) {
-            Log.e("CaptionService", "onServiceConnected: ${e.message}")
+        instance = this
+
+        // Widen scope: watch ALL packages, ALL window types, include hidden views.
+        // packageNames = null is critical — Live Caption lives in com.google.android.as,
+        // not in YouTube/VLC/Chrome. Without null here, those events are never delivered.
+        serviceInfo = serviceInfo?.also { info ->
+            info.eventTypes =
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED   or
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.flags =
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS             or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            info.notificationTimeout = 50
+            info.packageNames = null // Watch ALL packages
+        }
+
+        // Pre-download EN and HI models at startup so first translation is instant
+        predownloadModels()
+        Log.d("CaptionLens", "✅ Service connected — watching all windows, all apps")
+    }
+
+    // ── Model pre-download ────────────────────────────────────────────────────
+
+    private fun predownloadModels() {
+        // Always pre-download EN and HI since those are the two output languages
+        listOf(TranslateLanguage.ENGLISH, TranslateLanguage.HINDI).forEach { tgt ->
+            // Pre-download from the most common source language (Japanese)
+            // Other models are downloaded on-demand when first detected
+            getOrCreateTranslator(TranslateLanguage.JAPANESE, tgt)
+                ?.downloadModelIfNeeded()
+                ?.addOnSuccessListener { Log.d("CaptionLens", "Model JA→$tgt ready ✅") }
+                ?.addOnFailureListener { Log.e("CaptionLens", "Model JA→$tgt failed: ${it.message}") }
         }
     }
 
-    // ── event handler ─────────────────────────────────────────────────────────
+    // ── Translator cache ──────────────────────────────────────────────────────
+
+    private fun getOrCreateTranslator(src: String, tgt: String): Translator? {
+        if (src == tgt) return null
+        val key = "${src}_${tgt}"
+        return translatorCache.getOrPut(key) {
+            Translation.getClient(
+                TranslatorOptions.Builder()
+                    .setSourceLanguage(src)
+                    .setTargetLanguage(tgt)
+                    .build()
+            )
+        }
+    }
+
+    // ── Event handler ─────────────────────────────────────────────────────────
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        try {
-            if (event == null) return
-            val pkg = event.packageName?.toString() ?: return
+        if (event == null) return
 
-            // Accept only events from the Live Caption / ASI overlay.
-            // This covers audio from ANY source — YouTube, VLC, Chrome, Firefox,
-            // MX Player, phone calls, Spotify, or any future app — because Live
-            // Caption operates at the OS audio-mixer level, not per-app.
-            val isLiveCaption = LIVE_CAPTION_PACKAGES.any { pkg.contains(it) }
-            if (!isLiveCaption) return
-
-            val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
-            try {
-                val captions = LinkedHashSet<String>()
-                collectLiveCaptionNodes(root, captions)
-                if (captions.isEmpty()) return
-
-                val combined = captions.toList().takeLast(2).joinToString("\n").trim()
-                if (combined.isBlank() || combined == lastCaption) return
-
-                lastCaption = combined
-                pendingText = combined
-                handler.removeCallbacks(debounceRunnable)
-                handler.postDelayed(debounceRunnable, 40)
-            } finally {
-                @Suppress("DEPRECATION")
+        // STRATEGY A — scan ALL open windows.
+        // This is what catches Android Live Caption: it runs as a floating overlay
+        // window owned by com.google.android.as, separate from the active app window.
+        // rootInActiveWindow alone will NEVER see it.
+        val allWindows = windows
+        if (!allWindows.isNullOrEmpty()) {
+            for (window in allWindows) {
+                val root = window.root ?: continue
+                val text = extractCaptions(root)
                 root.recycle()
+                if (text.isNotBlank()) {
+                    scheduleTranslate(text)
+                    return
+                }
             }
-        } catch (e: Exception) {
-            Log.e("CaptionService", "onAccessibilityEvent: ${e.message}")
+        }
+
+        // STRATEGY B — fallback: scan just the active window root
+        val root = rootInActiveWindow ?: return
+        val text = extractCaptions(root)
+        root.recycle()
+        if (text.isNotBlank()) scheduleTranslate(text)
+    }
+
+    // ── Caption extraction ────────────────────────────────────────────────────
+
+    private fun extractCaptions(root: AccessibilityNodeInfo): String {
+        val results = mutableListOf<String>()
+
+        // Strategy 1: search by known caption view IDs (fastest, most precise)
+        for (id in CAPTION_VIEW_IDS) {
+            val nodes = root.findAccessibilityNodeInfosByViewId(id)
+            for (node in nodes) {
+                val t = node.text?.toString()?.trim() ?: ""
+                if (t.isNotEmpty()) results.add(t)
+                node.recycle()
+            }
+            if (results.isNotEmpty()) break
+        }
+
+        // Strategy 2: deep tree scan for any text that looks like a caption
+        // (any language — detection happens later in the translation pipeline)
+        if (results.isEmpty()) {
+            val sb = StringBuilder()
+            deepScan(root, sb)
+            sb.toString().lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && looksLikeCaption(it) }
+                .forEach { results.add(it) }
+        }
+
+        return results
+            .filter { looksLikeCaption(it) }
+            .distinct()
+            .joinToString(" ")
+            .trim()
+    }
+
+    private fun deepScan(node: AccessibilityNodeInfo?, sb: StringBuilder) {
+        if (node == null) return
+        node.text?.toString()?.let { if (it.isNotBlank()) sb.append(it).append("\n") }
+        node.contentDescription?.toString()?.let {
+            if (it.isNotBlank()) sb.append(it).append("\n")
+        }
+        for (i in 0 until node.childCount) {
+            deepScan(node.getChild(i), sb)
         }
     }
 
-    // ── translation pipeline ──────────────────────────────────────────────────
-    private fun processCaption(text: String) {
-        try {
-            LanguageDetector.detectLanguage(text) { sourceLang ->
-                val wantHindi = targetLanguage.lowercase() == "hindi"
+    // Checks if a string looks like real caption content.
+    // Filters out UI chrome (buttons, titles, URLs) while keeping
+    // any human language — Japanese, Chinese, Korean, French, German,
+    // Spanish, Turkish, English, etc.
+    private fun looksLikeCaption(text: String): Boolean {
+        if (text.length < 2 || text.length > 300) return false
+        if (text.contains("http", ignoreCase = true)) return false
+        if (text.contains("://")) return false
+        // Reject obvious UI strings
+        val uiWords = listOf("subscribe", "search", "settings", "menu",
+            "comments", "loading", "buffering", "skip")
+        if (uiWords.any { text.contains(it, ignoreCase = true) }) return false
+        // Accept: contains CJK / Hangul / Hiragana / Katakana / Latin letters
+        return text.any { c ->
+            c.isLetter() // accepts any Unicode letter — all languages pass this
+        }
+    }
 
-                if (wantHindi) {
-                    // Translate to English first (fast), then Hindi.
-                    // Both results go to OverlayService via the correct fields.
-                    TranslationManager.translate(text, sourceLang, "en") { engText ->
-                        TranslationManager.translate(text, sourceLang, "hi") { hindiText ->
-                            // latestTranslatedText is what the Flutter preview box reads.
-                            latestTranslatedText = hindiText
-                            // updateText keeps latestEnglish and latestHindi correctly named.
-                            OverlayService.updateText(
-                                original = text,
-                                english  = engText,
-                                hindi    = hindiText
-                            )
-                            Log.d("CaptionService",
-                                "[$sourceLang→EN] $engText | [$sourceLang→HI] $hindiText")
+    // ── Debounced translation ─────────────────────────────────────────────────
+
+    private fun scheduleTranslate(text: String) {
+        if (text == lastCaptionText) return
+        debounceRunnable?.let { handler.removeCallbacks(it) }
+        debounceRunnable = Runnable {
+            if (text != lastCaptionText) {
+                lastCaptionText  = text
+                latestOriginal   = text
+                detectAndTranslate(text)
+            }
+        }
+        handler.postDelayed(debounceRunnable!!, 350)
+    }
+
+    // ── Language detection + translation ─────────────────────────────────────
+
+    private fun detectAndTranslate(text: String) {
+        langIdentifier.identifyLanguage(text)
+            .addOnSuccessListener { langCode ->
+                val detectedCode = if (langCode == "und" || langCode.isBlank()) "ja" else langCode
+                Log.d("CaptionLens", "Detected lang: $detectedCode | text: $text")
+
+                val srcLang = SUPPORTED_LANGUAGES[detectedCode]
+                    ?: SUPPORTED_LANGUAGES["ja"]!! // fallback to Japanese if unsupported
+
+                val wantHindi = targetLanguage == "hindi"
+
+                if (srcLang == TranslateLanguage.ENGLISH) {
+                    // Source is already English — use directly, still translate to Hindi if needed
+                    latestEnglish = text
+                    if (wantHindi) {
+                        translateWith(
+                            text, TranslateLanguage.ENGLISH, TranslateLanguage.HINDI
+                        ) { hindi ->
+                            latestHindi = hindi
+                            OverlayService.updateText(text, text, hindi)
+                            MainActivity.instance?.onTranslation(text, text, hindi)
+                            Log.d("CaptionLens", "EN→HI: $hindi")
                         }
+                    } else {
+                        latestHindi = ""
+                        OverlayService.updateText(text, text, "")
+                        MainActivity.instance?.onTranslation(text, text, "")
                     }
                 } else {
-                    TranslationManager.translate(text, sourceLang, "en") { engText ->
-                        latestTranslatedText = engText
-                        OverlayService.updateText(
-                            original = text,
-                            english  = engText,
-                            hindi    = ""
-                        )
-                        Log.d("CaptionService", "[$sourceLang→EN] $engText")
+                    // Translate to English first (always)
+                    translateWith(text, srcLang, TranslateLanguage.ENGLISH) { english ->
+                        latestEnglish = english
+                        Log.d("CaptionLens", "$detectedCode→EN: $english")
+
+                        if (wantHindi) {
+                            // Translate original → Hindi directly (better than EN→HI)
+                            translateWith(text, srcLang, TranslateLanguage.HINDI) { hindi ->
+                                latestHindi = hindi
+                                OverlayService.updateText(text, english, hindi)
+                                MainActivity.instance?.onTranslation(text, english, hindi)
+                                Log.d("CaptionLens", "$detectedCode→HI: $hindi")
+                            }
+                        } else {
+                            latestHindi = ""
+                            OverlayService.updateText(text, english, "")
+                            MainActivity.instance?.onTranslation(text, english, "")
+                        }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e("CaptionService", "processCaption: ${e.message}")
-            latestTranslatedText = text
-            OverlayService.updateText(original = text, english = text, hindi = "")
-        }
+            .addOnFailureListener {
+                Log.e("CaptionLens", "Language detection failed: ${it.message}")
+                // Fallback: try translating as Japanese→English
+                translateWith(text, TranslateLanguage.JAPANESE, TranslateLanguage.ENGLISH) { english ->
+                    latestEnglish = english
+                    OverlayService.updateText(text, english, "")
+                    MainActivity.instance?.onTranslation(text, english, "")
+                }
+            }
     }
 
-    // ── Live Caption node collector ───────────────────────────────────────────
-    // ASI's Live Caption uses dedicated view IDs (caption_text, caption_line, etc.).
-    // We match those first; fall back to any short, speech-like TextView as secondary.
-    // We do NOT use generic rules that would match UI chrome from other windows.
-    private fun collectLiveCaptionNodes(
-        node: AccessibilityNodeInfo?,
-        out:  LinkedHashSet<String>
+    private fun translateWith(
+        text: String,
+        src: String,
+        tgt: String,
+        onDone: (String) -> Unit
     ) {
-        try {
-            if (node == null) return
-            val text   = node.text?.toString()?.trim() ?: ""
-            val viewId = node.viewIdResourceName?.lowercase() ?: ""
-            val cls    = node.className?.toString() ?: ""
-
-            val isCaptionById =
-                viewId.contains("caption_text") ||
-                viewId.contains("caption_line") ||
-                viewId.contains("live_caption") ||
-                viewId.contains("transcript")
-
-            val looksLikeCaption =
-                cls.contains("TextView") &&
-                text.isNotBlank()        &&
-                text.length in 2..300    &&
-                !text.contains("http")   &&
-                !text.contains("://")    &&
-                !text.contains("Search",    ignoreCase = true) &&
-                !text.contains("Settings",  ignoreCase = true) &&
-                !text.contains("Subscribe", ignoreCase = true) &&
-                !text.contains("Comments",  ignoreCase = true)
-
-            if ((isCaptionById || looksLikeCaption) && text.isNotBlank()) {
-                out.add(text)
+        val translator = getOrCreateTranslator(src, tgt) ?: run {
+            onDone(text); return
+        }
+        translator.downloadModelIfNeeded()
+            .addOnSuccessListener {
+                translator.translate(text)
+                    .addOnSuccessListener { result -> onDone(result.ifBlank { text }) }
+                    .addOnFailureListener { onDone(text) }
             }
-
-            for (i in 0 until node.childCount) {
-                collectLiveCaptionNodes(node.getChild(i), out)
-            }
-        } catch (_: Exception) {}
+            .addOnFailureListener { onDone(text) }
     }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
 
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        instance = null
+        debounceRunnable?.let { handler.removeCallbacks(it) }
+        translatorCache.values.forEach { runCatching { it.close() } }
+        translatorCache.clear()
+        langIdentifier.close()
         super.onDestroy()
-        handler.removeCallbacksAndMessages(null)
-        TranslationManager.closeAll()
     }
 }
