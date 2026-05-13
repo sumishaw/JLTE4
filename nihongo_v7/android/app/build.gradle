@@ -5,41 +5,28 @@ plugins {
 }
 
 android {
-
     namespace 'com.example.nihongolens'
 
     compileSdk 34
 
     defaultConfig {
-
         applicationId "com.example.nihongolens"
-
         minSdk 24
-
         targetSdk 34
-
         versionCode 1
-
         versionName "1.0"
-
         multiDexEnabled true
     }
 
     buildTypes {
-
         release {
-
             signingConfig signingConfigs.debug
-
             minifyEnabled false
-
             shrinkResources false
         }
     }
 
     compileOptions {
-        // FIX: must be Java 11, not 17 — Flutter 3.22's Kotlin plugin targets JVM 11.
-        // Mismatching this caused "binary metadata is 1.9.0, expected 1.7.1" errors.
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
@@ -66,20 +53,9 @@ flutter {
 }
 
 dependencies {
-
-    // FIX: kotlin-stdlib version MUST match the Kotlin plugin version Flutter injects.
-    // Flutter 3.22 uses Kotlin 1.7.10 via its Gradle plugin.
-    // The previous 1.9.22 caused "incompatible metadata version: is 1.9.0, expected 1.7.1".
-    // Use kotlin-stdlib-jdk8 (the JDK8 variant) which is what Android projects expect.
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.7.10"
-
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22"
     implementation 'androidx.multidex:multidex:2.0.1'
-
     implementation 'com.google.mlkit:translate:17.0.2'
-
     implementation 'com.google.mlkit:language-id:17.0.4'
-
-    // Downgraded to 1.12.0 — 1.13.x requires compileSdk 34 with AGP 8+,
-    // which can conflict when the Kotlin version is pinned to 1.7.x.
     implementation 'androidx.core:core-ktx:1.12.0'
 }
