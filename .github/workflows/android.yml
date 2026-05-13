@@ -17,11 +17,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Java 17 (required by AGP 8.x / Gradle 8.x) ───────────────────────
-      - name: Set up JDK 17
+      # ── 2. Java 11 ───────────────────────────────────────────────────────────
+      # Flutter 3.22's kotlin-gradle-plugin 1.7.10 targets JVM 11.
+      # Using JDK 17 causes "incompatible metadata" Kotlin version clashes.
+      - name: Set up JDK 11
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '11'
           distribution: 'temurin'
           cache: gradle
 
@@ -29,7 +31,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'        # pin to a stable release
+          flutter-version: '3.22.0'
           channel: 'stable'
           cache: true
 
@@ -49,12 +51,23 @@ jobs:
         working-directory: nihongo_v7
         run: flutter pub get
 
-      # ── 5b. Regenerate missing Android wrapper files (gradlew, gradle/) ──────
-      # The repo was created without committing the gradle wrapper. This command
-      # re-creates only the missing files without touching existing source code.
+      # ── 5b. Regenerate missing Android wrapper files ──────────────────────────
+      # gradlew and gradle/wrapper/ are not committed to the repo.
+      # flutter create regenerates them without touching existing source files.
       - name: Ensure Android wrapper files exist
         working-directory: nihongo_v7
         run: flutter create --platforms android . --project-name nihongo_v7
+
+      # ── 5c. Pin Kotlin plugin to 1.7.10 in root build.gradle ─────────────────
+      # flutter create may generate the root build.gradle with a newer Kotlin version.
+      # We force it to 1.7.10 so all subprojects use the same version, eliminating
+      # the "binary metadata is 1.9.0, expected 1.7.1" incompatible-Kotlin errors.
+      - name: Pin Kotlin version in root build.gradle
+        working-directory: nihongo_v7/android
+        run: |
+          sed -i "s/ext.kotlin_version = .*/ext.kotlin_version = '1.7.10'/" build.gradle
+          echo "Kotlin version after patch:"
+          grep kotlin_version build.gradle || echo "(kotlin_version not found — may already be pinned)"
 
       # ── 6. Analyze (lint) ────────────────────────────────────────────────────
       - name: Run Flutter analyze
@@ -62,8 +75,6 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       # ── 7. Unit tests ────────────────────────────────────────────────────────
-      # Guard: flutter test exits with code 1 when the test/ directory is absent.
-      # This check runs tests when the directory exists, skips cleanly otherwise.
       - name: Run Flutter tests
         working-directory: nihongo_v7
         run: |
@@ -74,10 +85,6 @@ jobs:
           fi
 
       # ── 8. Make gradlew executable ───────────────────────────────────────────
-      # FIX: gradlew is not committed to the repo. Running `flutter build apk`
-      # generates it automatically, so we let Flutter drive the full build
-      # (steps 9 & 10 below) rather than touching gradlew directly.
-      # The chmod step is kept as a no-op guard in case the file is later added.
       - name: Make gradlew executable
         working-directory: nihongo_v7/android
         run: |
