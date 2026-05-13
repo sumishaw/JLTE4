@@ -12,22 +12,30 @@ import java.util.LinkedHashSet
 /**
  * CaptionAccessibilityService
  *
- * Fixes applied:
- * 1. AccessibilityNodeInfo nodes must be recycled after use (API < 34 leaks
- *    native handles if you don't call recycle()).  Added safeRecycle() helper.
- * 2. rootInActiveWindow can return stale/recycled nodes; wrapped in try/catch
- *    and added null-guard before iterating children.
- * 3. TranslationManager.closeAll() called in onDestroy() to prevent Translator
- *    resource leaks when the service is stopped.
- * 4. Debounce reduced from 80 ms → 40 ms for near-live caption speed.
- * 5. Translation result now pushed to OverlayService.updateText() so the
- *    overlay updates without any polling via Flutter channel.
+ * KEY FIX: This service must listen to Android's Live Caption window
+ * (package: com.google.android.as / Android System Intelligence), NOT
+ * to media app packages like YouTube.
+ *
+ * When YouTube is playing, Android Live Caption creates its own floating
+ * overlay window owned by "com.google.android.as". That window contains
+ * TextViews with viewId "com.google.android.as:id/caption_text" (or similar).
+ *
+ * The old code filtered FOR youtube/netflix packages, which meant it was
+ * reading YouTube's own CC subtitle nodes — not the Live Caption overlay.
+ * This fix inverts the logic: listen to com.google.android.as events only.
  */
 class CaptionAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile var latestTranslatedText = "Waiting for captions…"
         @Volatile var targetLanguage       = "hindi"   // "english" or "hindi"
+
+        // Live Caption runs inside Android System Intelligence
+        private val LIVE_CAPTION_PACKAGES = setOf(
+            "com.google.android.as",           // Android System Intelligence (primary)
+            "com.google.android.accessibility.captions", // some OEM variants
+            "com.samsung.android.bixby.service" // Samsung Live Transcribe fallback
+        )
     }
 
     private val handler          = Handler(Looper.getMainLooper())
@@ -45,13 +53,16 @@ class CaptionAccessibilityService : AccessibilityService() {
         try {
             serviceInfo = AccessibilityServiceInfo().apply {
                 eventTypes      = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                                  AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                                  AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED      or
+                                  AccessibilityEvent.TYPE_WINDOWS_CHANGED
                 feedbackType    = AccessibilityServiceInfo.FEEDBACK_GENERIC
-                flags           = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                flags           = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS          or
                                   AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
                 notificationTimeout = 30
+                // KEY FIX: do NOT set packageNames here — we filter manually below
+                // so we can match multiple Live Caption package variants.
             }
-            Log.d("CaptionService", "Accessibility service connected")
+            Log.d("CaptionService", "Accessibility service connected — watching Live Caption")
         } catch (e: Exception) {
             Log.e("CaptionService", "onServiceConnected error: ${e.message}")
         }
@@ -63,24 +74,17 @@ class CaptionAccessibilityService : AccessibilityService() {
             if (event == null) return
 
             val pkg = event.packageName?.toString()?.lowercase() ?: return
-            val isMediaApp = pkg.contains("youtube")    ||
-                             pkg.contains("netflix")    ||
-                             pkg.contains("chrome")     ||
-                             pkg.contains("firefox")    ||
-                             pkg.contains("vlc")        ||
-                             pkg.contains("mxtech")     ||
-                             pkg.contains("hotstar")    ||
-                             pkg.contains("primevideo") ||
-                             pkg.contains("jiocinema")  ||
-                             pkg.contains("mxplayer")   ||
-                             pkg.contains("mx.player")
-            if (!isMediaApp) return
 
-            // FIX 1: obtain a reference, use it, then recycle it.
+            // KEY FIX: only process events from Live Caption / ASI packages.
+            // Drop everything else (YouTube, Chrome, etc.) — those are the
+            // app's own subtitle nodes, not Android's Live Caption overlay.
+            val isLiveCaption = LIVE_CAPTION_PACKAGES.any { pkg.contains(it) }
+            if (!isLiveCaption) return
+
             val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
             try {
                 val captions = LinkedHashSet<String>()
-                collectCaptions(root, captions)
+                collectLiveCaptionText(root, captions)
                 if (captions.isEmpty()) return
 
                 val combined = captions.toList().takeLast(2).joinToString("\n").trim()
@@ -92,7 +96,6 @@ class CaptionAccessibilityService : AccessibilityService() {
                 handler.removeCallbacks(debounceRunnable)
                 handler.postDelayed(debounceRunnable, 40)
             } finally {
-                // FIX 2: always recycle the root node to avoid native handle leak
                 @Suppress("DEPRECATION")
                 root.recycle()
             }
@@ -139,8 +142,14 @@ class CaptionAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── caption node collector ────────────────────────────────────────────────
-    private fun collectCaptions(
+    // ── Live Caption node collector ───────────────────────────────────────────
+    // Live Caption nodes are specifically identified by:
+    //   1. viewId containing "caption_text" or "caption" (com.google.android.as)
+    //   2. OR a TextView with content that looks like a caption line
+    //      (short, no UI chrome keywords, no URLs)
+    // We do NOT use a generic "any TextView" rule here because that would
+    // accidentally pick up UI elements from other windows.
+    private fun collectLiveCaptionText(
         node: AccessibilityNodeInfo?,
         out:  LinkedHashSet<String>
     ) {
@@ -148,27 +157,31 @@ class CaptionAccessibilityService : AccessibilityService() {
             if (node == null) return
             val text   = node.text?.toString()?.trim() ?: ""
             val viewId = node.viewIdResourceName?.lowercase() ?: ""
+            val cls    = node.className?.toString() ?: ""
 
-            val isCaption =
-                text.isNotBlank() &&
-                text.length in 2..200 &&
-                !text.contains("http") &&
-                !text.contains("search", ignoreCase = true) &&
-                !text.contains("subscribe", ignoreCase = true) &&
-                !text.contains("comments", ignoreCase = true) &&
-                (
-                    viewId.contains("caption")  ||
-                    viewId.contains("subtitle") ||
-                    viewId.contains("player")   ||
-                    viewId.contains("text")     ||
-                    node.className?.toString()?.contains("TextView") == true
-                )
+            // Primary: Live Caption's dedicated caption node IDs
+            val isCaptionNode =
+                viewId.contains("caption_text") ||
+                viewId.contains("caption_line") ||
+                viewId.contains("transcript")   ||
+                viewId.contains("live_caption")
 
-            if (isCaption) out.add(text)
+            // Secondary: any short, clean TextView that looks like speech
+            val looksLikeCaption =
+                cls.contains("TextView") &&
+                text.isNotBlank()        &&
+                text.length in 2..300    &&
+                !text.contains("http")   &&
+                !text.contains("://")    &&
+                !text.contains("Search", ignoreCase = true) &&
+                !text.contains("Settings", ignoreCase = true)
+
+            if ((isCaptionNode || looksLikeCaption) && text.isNotBlank()) {
+                out.add(text)
+            }
 
             for (i in 0 until node.childCount) {
-                // FIX 3: getChild() can return null; collectCaptions already null-guards
-                collectCaptions(node.getChild(i), out)
+                collectLiveCaptionText(node.getChild(i), out)
             }
         } catch (_: Exception) {}
     }
@@ -178,7 +191,6 @@ class CaptionAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
-        // FIX 4: release all ML Kit Translator instances held by TranslationManager
         TranslationManager.closeAll()
     }
 }
