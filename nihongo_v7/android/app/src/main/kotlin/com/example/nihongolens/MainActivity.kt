@@ -1,137 +1,78 @@
 package com.example.nihongolens
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
-import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
 
-    private val CHANNEL =
-        "overlay_channel"
-
-    override fun onCreate(
-        savedInstanceState: Bundle?
-    ) {
-
-        super.onCreate(savedInstanceState)
-
-        requestIgnoreBatteryOptimizations()
+    companion object {
+        var instance: MainActivity? = null
     }
 
-    override fun configureFlutterEngine(
-        @NonNull flutterEngine: FlutterEngine
-    ) {
+    private val CHANNEL = "overlay_channel"
+    private var methodChannel: MethodChannel? = null
 
-        super.configureFlutterEngine(
-            flutterEngine
-        )
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        instance = this
 
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            CHANNEL
-        ).setMethodCallHandler { call, result ->
+        methodChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
 
+        methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
 
-                "hasOverlayPermission" -> {
-
-                    result.success(
-                        Settings.canDrawOverlays(this)
-                    )
-                }
+                "hasOverlayPermission" ->
+                    result.success(Settings.canDrawOverlays(this))
 
                 "requestOverlayPermission" -> {
-
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-
-                    startActivity(intent)
-
-                    result.success(true)
+                    if (!Settings.canDrawOverlays(this)) {
+                        startActivity(Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")))
+                        result.success(false)
+                    } else {
+                        result.success(true)
+                    }
                 }
 
-                "checkAccessibilityEnabled" -> {
-
-                    result.success(
-                        isAccessibilityEnabled()
-                    )
-                }
+                "checkAccessibilityEnabled" ->
+                    result.success(isAccessibilityEnabled())
 
                 "openAccessibilitySettings" -> {
-
-                    val intent =
-                        Intent(
-                            Settings.ACTION_ACCESSIBILITY_SETTINGS
-                        )
-
-                    startActivity(intent)
-
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     result.success(true)
                 }
 
                 "startOverlay" -> {
-
-                    val intent =
-                        Intent(
-                            this,
-                            OverlayService::class.java
-                        )
-
-                    if (
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    ) {
-
-                        startForegroundService(intent)
-
-                    } else {
-
-                        startService(intent)
-                    }
-
+                    val i = Intent(this, OverlayService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                        startForegroundService(i) else startService(i)
                     result.success(true)
                 }
 
                 "stopOverlay" -> {
+                    stopService(Intent(this, OverlayService::class.java))
+                    result.success(true)
+                }
 
-                    stopService(
-                        Intent(
-                            this,
-                            OverlayService::class.java
-                        )
-                    )
-
+                "setTargetLanguage" -> {
+                    val lang = call.argument<String>("language") ?: "english"
+                    CaptionAccessibilityService.targetLanguage = lang
                     result.success(true)
                 }
 
                 "getLatestTranslation" -> {
-
-                    result.success(
-                        CaptionAccessibilityService.latestTranslatedText
-                    )
-                }
-
-                "setTargetLanguage" -> {
-
-                    val language =
-                        call.argument<String>(
-                            "language"
-                        ) ?: "english"
-
-                    CaptionAccessibilityService.targetLanguage =
-                        language
-
-                    result.success(true)
+                    result.success(mapOf(
+                        "original" to CaptionAccessibilityService.latestOriginal,
+                        "english"  to CaptionAccessibilityService.latestEnglish,
+                        "hindi"    to CaptionAccessibilityService.latestHindi
+                    ))
                 }
 
                 else -> result.notImplemented()
@@ -139,49 +80,33 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun isAccessibilityEnabled(): Boolean {
-
-        val expectedComponent =
-            ComponentName(
-                this,
-                CaptionAccessibilityService::class.java
-            )
-
-        val enabled =
-            Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            ) ?: return false
-
-        return enabled.contains(
-            expectedComponent.flattenToString()
-        )
+    // Called by CaptionAccessibilityService to push translations to Flutter UI instantly
+    fun onTranslation(original: String, english: String, hindi: String) {
+        runOnUiThread {
+            methodChannel?.invokeMethod("onTranslation", mapOf(
+                "original" to original,
+                "english"  to english,
+                "hindi"    to hindi
+            ))
+        }
     }
 
-    private fun requestIgnoreBatteryOptimizations() {
+    private fun isAccessibilityEnabled(): Boolean {
+        return try {
+            val service = "$packageName/${CaptionAccessibilityService::class.java.canonicalName}"
+            val enabled = Settings.Secure.getString(
+                contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            enabled?.contains(service) == true
+        } catch (_: Exception) { false }
+    }
 
-        try {
+    override fun onResume() {
+        super.onResume()
+        instance = this
+    }
 
-            val powerManager =
-                getSystemService(
-                    Context.POWER_SERVICE
-                ) as PowerManager
-
-            if (
-                !powerManager.isIgnoringBatteryOptimizations(
-                    packageName
-                )
-            ) {
-
-                val intent = Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
-                )
-
-                startActivity(intent)
-            }
-
-        } catch (_: Exception) {
-        }
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
     }
 }
