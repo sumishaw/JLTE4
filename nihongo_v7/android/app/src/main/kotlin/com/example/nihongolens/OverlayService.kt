@@ -12,24 +12,11 @@ import android.view.animation.AlphaAnimation
 import android.widget.*
 import androidx.core.app.NotificationCompat
 
-/**
- * OverlayService — Transparent floating caption overlay.
- *
- * Fixes applied:
- * 1. onDestroy() now checks viewAdded flag before removeView() to prevent
- *    "View not attached to window manager" IllegalArgumentException.
- * 2. Handler.post { buildOverlay() } could race with onDestroy(); guard with
- *    running flag inside the posted runnable.
- * 3. Touch listener: params!! force-unwrap replaced with safe-call + return
- *    to avoid NullPointerException when overlay is torn down during a drag.
- * 4. updateViewLayout wrapped in isAdded guard to prevent IllegalArgumentException.
- * 5. startUpdateLoop thread: catch InterruptedException properly and clear flag.
- */
 class OverlayService : Service() {
 
     companion object {
-        const val CHANNEL_ID  = "nihongo_overlay"
-        const val NOTIF_ID    = 1
+        const val CHANNEL_ID = "nihongo_overlay"
+        const val NOTIF_ID   = 1
 
         @Volatile var latestEnglish  = "Waiting for captions…"
         @Volatile var latestHindi    = ""
@@ -42,49 +29,37 @@ class OverlayService : Service() {
         }
     }
 
-    // ── layout refs ──────────────────────────────────────────────────────────
-    private var windowManager: WindowManager? = null
-    private var overlayView:   View?           = null
-    private var line1Tv:       TextView?        = null
-    private var line2Tv:       TextView?        = null
+    private var windowManager: WindowManager?              = null
+    private var overlayView:   View?                       = null
+    private var originalTv:    TextView?                   = null  // dim top row: original text
+    private var translatedTv:  TextView?                   = null  // bright bottom row: translation
     private var params:        WindowManager.LayoutParams? = null
 
-    private val handler  = Handler(Looper.getMainLooper())
-    @Volatile private var running    = true
-    // FIX 1: track whether the view was successfully added to WindowManager
-    @Volatile private var viewAdded  = false
+    private val handler = Handler(Looper.getMainLooper())
+    @Volatile private var running   = true
+    @Volatile private var viewAdded = false
 
-    // 2-line buffer state
-    private val lineBuffer   = ArrayDeque<String>(4)
-    private var displayedKey = ""
-    private var lastRawText  = ""
+    private var lastDisplayedKey = ""
 
-    // ── dp helper ────────────────────────────────────────────────────────────
     private fun dp(v: Float) = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
-    private fun sp(v: Float) = TypedValue.applyDimension(
-        TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
-    // ── lifecycle ────────────────────────────────────────────────────────────
+    // ── lifecycle ─────────────────────────────────────────────────────────────
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        // FIX 2: only build overlay if the service is still alive when the post fires
-        handler.post {
-            if (running) buildOverlay()
-        }
+        handler.post { if (running) buildOverlay() }
         startUpdateLoop()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         running = false
         handler.removeCallbacksAndMessages(null)
-        // FIX 1: only call removeView() if we actually added the view
         if (viewAdded) {
             try { windowManager?.removeView(overlayView) } catch (_: Exception) {}
             viewAdded = false
@@ -92,33 +67,35 @@ class OverlayService : Service() {
         super.onDestroy()
     }
 
-    // ── overlay construction ─────────────────────────────────────────────────
+    // ── overlay construction ──────────────────────────────────────────────────
     private fun buildOverlay() {
         try {
             val root = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity     = Gravity.CENTER_HORIZONTAL
-                setPadding(dp(12f).toInt(), dp(8f).toInt(), dp(12f).toInt(), dp(8f).toInt())
+                setPadding(dp(14f).toInt(), dp(8f).toInt(), dp(14f).toInt(), dp(8f).toInt())
             }
 
-            fun makeCaptionTv(textSizeSp: Float, alpha: Float) = TextView(this).apply {
-                setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
-                typeface   = Typeface.DEFAULT_BOLD
-                setShadowLayer(dp(4f), 0f, dp(2f), Color.BLACK)
-                this.alpha = alpha
-                setLineSpacing(0f, 1.25f)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { setMargins(0, 0, 0, dp(3f).toInt()) }
-            }
+            fun makeTextView(sizeSp: Float, alphaVal: Float, color: Int) =
+                TextView(this).apply {
+                    setTextColor(color)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+                    typeface  = Typeface.DEFAULT_BOLD
+                    setShadowLayer(dp(4f), 0f, dp(2f), Color.BLACK)
+                    alpha     = alphaVal
+                    setLineSpacing(0f, 1.2f)
+                    gravity   = Gravity.CENTER_HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(0, 0, 0, dp(4f).toInt()) }
+                }
 
-            line1Tv = makeCaptionTv(16f, 0.75f)
-            line2Tv = makeCaptionTv(22f, 1.00f)
+            originalTv   = makeTextView(13f, 0.50f, Color.WHITE)  // original speech, dim
+            translatedTv = makeTextView(22f, 1.00f, Color.WHITE)  // translated, bright
 
-            root.addView(line1Tv)
-            root.addView(line2Tv)
+            root.addView(originalTv)
+            root.addView(translatedTv)
             overlayView = root
 
             val wType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -131,17 +108,16 @@ class OverlayService : Service() {
                 (screenW * 0.92).toInt(),
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 wType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE          or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL        or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN       or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE    or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL  or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSPARENT
             ).apply {
                 gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = dp(72f).toInt()
+                y = dp(80f).toInt()
             }
 
-            // FIX 3: use safe-calls instead of !! in the touch listener
             var sx = 0f; var sy = 0f; var ix = 0; var iy = 0
             root.setOnTouchListener { _, ev ->
                 val p = params ?: return@setOnTouchListener false
@@ -154,7 +130,6 @@ class OverlayService : Service() {
                     MotionEvent.ACTION_MOVE -> {
                         p.x = ix + (ev.rawX - sx).toInt()
                         p.y = iy - (ev.rawY - sy).toInt()
-                        // FIX 4: only call updateViewLayout when the view is attached
                         if (viewAdded) {
                             try { windowManager?.updateViewLayout(overlayView, p) }
                             catch (_: Exception) {}
@@ -166,54 +141,52 @@ class OverlayService : Service() {
             }
 
             windowManager?.addView(overlayView, params)
-            viewAdded = true   // FIX 1: mark as added only after success
-
+            viewAdded = true
         } catch (e: Exception) {
-            android.util.Log.e("OverlayService", "buildOverlay error: ${e.message}")
+            android.util.Log.e("OverlayService", "buildOverlay: ${e.message}")
         }
     }
 
-    // ── ultra-fast 50 ms update loop ─────────────────────────────────────────
+    // ── update loop ───────────────────────────────────────────────────────────
+    // Reads the correct translation field based on what was populated:
+    // - Hindi mode  → latestHindi is non-blank → show Hindi in big row
+    // - English mode → latestHindi is blank    → show English in big row
+    // - Top dim row always shows the original caption text (any language)
     private fun startUpdateLoop() {
         Thread {
             while (running) {
                 try {
                     Thread.sleep(50)
-                    val raw  = latestEnglish
-                    val orig = latestOriginal
 
-                    if (raw == lastRawText || raw.isBlank()) continue
-                    lastRawText = raw
+                    val original = latestOriginal
+                    val english  = latestEnglish
+                    val hindi    = latestHindi
 
-                    val incoming = raw.trim().lines().map { it.trim() }.filter { it.isNotEmpty() }
-                    incoming.forEach { line ->
-                        if (lineBuffer.isEmpty() || lineBuffer.last() != line)
-                            lineBuffer.addLast(line)
-                        if (lineBuffer.size > 4) lineBuffer.removeFirst()
-                    }
+                    // Prefer Hindi when available (user chose Hindi mode)
+                    val translated = if (hindi.isNotBlank()) hindi else english
 
-                    val bufKey = lineBuffer.takeLast(2).joinToString("|")
-                    if (bufKey == displayedKey) continue
-                    displayedKey = bufKey
+                    val key = "$original|$translated"
+                    if (key == lastDisplayedKey) continue
+                    if (translated.isBlank() || translated == "Waiting for captions…") continue
+                    lastDisplayedKey = key
 
-                    val showLines = lineBuffer.takeLast(2)
-                    val l1 = if (showLines.size >= 2) showLines[showLines.size - 2] else ""
-                    val l2 = showLines.last()
+                    // Only show the original dim row when the original differs from
+                    // the translation (i.e. it was actually translated, not passed through)
+                    val showOriginal = original.isNotBlank() && original != translated
 
                     handler.post {
-                        line1Tv?.apply {
-                            text       = if (l1.isNotEmpty()) "↑ $l1" else ""
-                            visibility = if (l1.isNotEmpty()) View.VISIBLE else View.GONE
+                        originalTv?.apply {
+                            text       = if (showOriginal) original else ""
+                            visibility = if (showOriginal) View.VISIBLE else View.GONE
                         }
-                        line2Tv?.apply {
-                            text = l2
-                            startAnimation(AlphaAnimation(0.2f, 1f).apply {
-                                duration  = 120
+                        translatedTv?.apply {
+                            text = translated
+                            startAnimation(AlphaAnimation(0.15f, 1f).apply {
+                                duration  = 150
                                 fillAfter = true
                             })
                         }
                     }
-                // FIX 5: catch InterruptedException separately; re-interrupt the thread
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     break
@@ -222,7 +195,7 @@ class OverlayService : Service() {
         }.also { it.isDaemon = true; it.name = "overlay-update" }.start()
     }
 
-    // ── notification helpers ──────────────────────────────────────────────────
+    // ── notification ──────────────────────────────────────────────────────────
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel(CHANNEL_ID, "Caption Translator Overlay",
@@ -236,7 +209,7 @@ class OverlayService : Service() {
     private fun buildNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Caption Translator Active")
-            .setContentText("Transparent overlay running — translating captions")
+            .setContentText("Works with any app — YouTube, VLC, Chrome, and more")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
             .setSilent(true)
