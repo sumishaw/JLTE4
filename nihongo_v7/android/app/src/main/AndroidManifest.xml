@@ -2,37 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.nihongolens">
 
-    <!-- Permissions -->
-
     <uses-permission android:name="android.permission.INTERNET" />
-
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-
-    <!--
-        FIX 1: FOREGROUND_SERVICE_SPECIAL_USE requires a matching <property> tag
-        (API 34+). Without it the foreground service throws at runtime.
-    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <uses-permission
-        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-
-    <!-- android:name changed from deprecated io.flutter.app.FlutterApplication
-         to android.app.Application (Flutter 2+). The old class causes NoClassDefFoundError. -->
     <application
         android:name="android.app.Application"
         android:label="Caption Translator"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:hardwareAccelerated="true">
-
-        <!-- Main Activity -->
 
         <activity
             android:name=".MainActivity"
@@ -48,22 +31,14 @@
                 android:resource="@style/NormalTheme" />
 
             <intent-filter>
-
-                <action
-                    android:name="android.intent.action.MAIN" />
-
-                <category
-                    android:name="android.intent.category.LAUNCHER" />
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Flutter Embedding -->
 
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-
-        <!-- Accessibility Service -->
 
         <service
             android:name=".CaptionAccessibilityService"
@@ -71,9 +46,7 @@
             android:exported="false">
 
             <intent-filter>
-
-                <action
-                    android:name="android.accessibilityservice.AccessibilityService" />
+                <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
 
             <meta-data
@@ -81,18 +54,12 @@
                 android:resource="@xml/accessibility_config" />
         </service>
 
-        <!-- Overlay Service -->
-
         <service
             android:name=".OverlayService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
 
-            <!--
-                FIX 3: Required <property> for foregroundServiceType="specialUse" on API 34.
-                Without this the OS refuses to start the foreground service.
-            -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="caption_overlay" />
@@ -100,27 +67,16 @@
 
     </application>
 
-    <!-- Package Visibility -->
-
+    <!-- KEY FIX: Add com.google.android.as so Android 11+ allows our
+         accessibility service to observe Live Caption's window events -->
     <queries>
-
-        <package
-            android:name="com.google.android.youtube" />
-
-        <package
-            android:name="com.netflix.mediaclient" />
-
-        <package
-            android:name="org.videolan.vlc" />
-
-        <package
-            android:name="com.android.chrome" />
-
-        <package
-            android:name="org.mozilla.firefox" />
-
-        <package
-            android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="com.google.android.as" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="org.videolan.vlc" />
+        <package android:name="com.android.chrome" />
+        <package android:name="org.mozilla.firefox" />
+        <package android:name="com.mxtech.videoplayer.ad" />
     </queries>
 
 </manifest>
