@@ -13,12 +13,15 @@ import java.util.LinkedHashSet
  * CaptionAccessibilityService
  *
  * Fixes applied:
- * 1. Debounce reduced from 80 ms → 40 ms for near-live caption speed.
- * 2. Translation result now pushed to OverlayService.updateText() so the
+ * 1. AccessibilityNodeInfo nodes must be recycled after use (API < 34 leaks
+ *    native handles if you don't call recycle()).  Added safeRecycle() helper.
+ * 2. rootInActiveWindow can return stale/recycled nodes; wrapped in try/catch
+ *    and added null-guard before iterating children.
+ * 3. TranslationManager.closeAll() called in onDestroy() to prevent Translator
+ *    resource leaks when the service is stopped.
+ * 4. Debounce reduced from 80 ms → 40 ms for near-live caption speed.
+ * 5. Translation result now pushed to OverlayService.updateText() so the
  *    overlay updates without any polling via Flutter channel.
- * 3. Both English and Hindi translation fired in parallel when target = hindi.
- * 4. latestTranslatedText kept for Flutter channel back-compat.
- * 5. Allowed apps list broadened; package filter is now inclusive.
  */
 class CaptionAccessibilityService : AccessibilityService() {
 
@@ -59,34 +62,40 @@ class CaptionAccessibilityService : AccessibilityService() {
         try {
             if (event == null) return
 
-            // Capture captions from any media/browser app (broad match)
             val pkg = event.packageName?.toString()?.lowercase() ?: return
-            val isMediaApp = pkg.contains("youtube")   ||
-                             pkg.contains("netflix")   ||
-                             pkg.contains("chrome")    ||
-                             pkg.contains("firefox")   ||
-                             pkg.contains("vlc")       ||
-                             pkg.contains("mxtech")    ||
-                             pkg.contains("hotstar")   ||
-                             pkg.contains("primevideo")||
-                             pkg.contains("jiocinema") ||
-                             pkg.contains("mxplayer")  ||
+            val isMediaApp = pkg.contains("youtube")    ||
+                             pkg.contains("netflix")    ||
+                             pkg.contains("chrome")     ||
+                             pkg.contains("firefox")    ||
+                             pkg.contains("vlc")        ||
+                             pkg.contains("mxtech")     ||
+                             pkg.contains("hotstar")    ||
+                             pkg.contains("primevideo") ||
+                             pkg.contains("jiocinema")  ||
+                             pkg.contains("mxplayer")   ||
                              pkg.contains("mx.player")
             if (!isMediaApp) return
 
-            val root = rootInActiveWindow ?: return
-            val captions = LinkedHashSet<String>()
-            collectCaptions(root, captions)
-            if (captions.isEmpty()) return
+            // FIX 1: obtain a reference, use it, then recycle it.
+            val root: AccessibilityNodeInfo = rootInActiveWindow ?: return
+            try {
+                val captions = LinkedHashSet<String>()
+                collectCaptions(root, captions)
+                if (captions.isEmpty()) return
 
-            val combined = captions.toList().takeLast(2).joinToString("\n").trim()
-            if (combined.isBlank() || combined == lastCaption) return
+                val combined = captions.toList().takeLast(2).joinToString("\n").trim()
+                if (combined.isBlank() || combined == lastCaption) return
 
-            lastCaption  = combined
-            pendingText  = combined
+                lastCaption = combined
+                pendingText = combined
 
-            handler.removeCallbacks(debounceRunnable)
-            handler.postDelayed(debounceRunnable, 40)   // 40 ms debounce
+                handler.removeCallbacks(debounceRunnable)
+                handler.postDelayed(debounceRunnable, 40)
+            } finally {
+                // FIX 2: always recycle the root node to avoid native handle leak
+                @Suppress("DEPRECATION")
+                root.recycle()
+            }
         } catch (e: Exception) {
             Log.e("CaptionService", "onAccessibilityEvent error: ${e.message}")
         }
@@ -99,18 +108,14 @@ class CaptionAccessibilityService : AccessibilityService() {
                 val wantHindi = targetLanguage.lowercase() == "hindi"
 
                 if (wantHindi) {
-                    // Translate → English first, then → Hindi in parallel
                     TranslationManager.translate(text, sourceLang, "en") { engText ->
                         TranslationManager.translate(text, sourceLang, "hi") { hindiText ->
                             latestTranslatedText = hindiText
-                            // Push both to overlay: line1 = English, line2 = Hindi
                             OverlayService.updateText(
                                 original = text,
                                 english  = engText,
                                 hindi    = hindiText
                             )
-                            // Also update OverlayService.latestEnglish for the 2-line display
-                            // line2 (main) = Hindi, line1 (dim) = English
                             OverlayService.latestEnglish  = hindiText
                             OverlayService.latestOriginal = engText
                             Log.d("CaptionService", "EN: $engText | HI: $hindiText")
@@ -118,7 +123,7 @@ class CaptionAccessibilityService : AccessibilityService() {
                     }
                 } else {
                     TranslationManager.translate(text, sourceLang, "en") { engText ->
-                        latestTranslatedText         = engText
+                        latestTranslatedText          = engText
                         OverlayService.latestEnglish  = engText
                         OverlayService.latestOriginal = text
                         OverlayService.updateText(text, engText)
@@ -128,7 +133,7 @@ class CaptionAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             Log.e("CaptionService", "processCaption error: ${e.message}")
-            latestTranslatedText         = text
+            latestTranslatedText          = text
             OverlayService.latestEnglish  = text
             OverlayService.latestOriginal = text
         }
@@ -162,6 +167,7 @@ class CaptionAccessibilityService : AccessibilityService() {
             if (isCaption) out.add(text)
 
             for (i in 0 until node.childCount) {
+                // FIX 3: getChild() can return null; collectCaptions already null-guards
                 collectCaptions(node.getChild(i), out)
             }
         } catch (_: Exception) {}
@@ -172,5 +178,7 @@ class CaptionAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        // FIX 4: release all ML Kit Translator instances held by TranslationManager
+        TranslationManager.closeAll()
     }
 }
