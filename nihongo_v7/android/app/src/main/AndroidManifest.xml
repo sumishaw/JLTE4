@@ -12,10 +12,11 @@
 
     <application
         android:name="android.app.Application"
-        android:label="Caption Translator"
+        android:label="Caption Lens"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:hardwareAccelerated="true">
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -36,10 +37,11 @@
 
         <meta-data android:name="flutterEmbedding" android:value="2" />
 
+        <!-- exported="true" required so Android OS can bind to this service -->
         <service
             android:name=".CaptionAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -60,25 +62,10 @@
 
     </application>
 
-    <!--
-        PACKAGE VISIBILITY (Android 11+)
-        We declare com.google.android.as so the system allows our accessibility
-        service to receive events from the Live Caption overlay window.
-        Because Live Caption works at the OS audio-mixer level, we do NOT need
-        to declare YouTube, VLC, Chrome, etc. — they are irrelevant to the
-        caption source. Any app whose audio Android Live Caption picks up will
-        automatically be covered with no further changes here.
-    -->
+    <!-- No need to list media app packages here — Live Caption works at OS
+         audio level and we scan all windows regardless of package name -->
     <queries>
-        <!-- Android System Intelligence — hosts the Live Caption overlay -->
         <package android:name="com.google.android.as" />
-        <!-- Kept for intent resolution if user opens these from the app -->
-        <package android:name="com.google.android.youtube" />
-        <package android:name="com.netflix.mediaclient" />
-        <package android:name="org.videolan.vlc" />
-        <package android:name="com.android.chrome" />
-        <package android:name="org.mozilla.firefox" />
-        <package android:name="com.mxtech.videoplayer.ad" />
     </queries>
 
 </manifest>
