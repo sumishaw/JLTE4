@@ -1,0 +1,40 @@
+// nihongo_v7/android/build.gradle  (ROOT-level, not app/build.gradle)
+//
+// This file pins the Kotlin Gradle plugin version for the whole project.
+// Flutter 3.22's flutter-gradle-plugin expects Kotlin 1.7.10.
+// Without this file, each subproject resolves Kotlin independently and
+// the stdlib version mismatch causes "incompatible metadata" compile errors.
+
+buildscript {
+
+    ext.kotlin_version = '1.7.10'
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = '../build'
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    // Force all subprojects (including Flutter's own) to use the same Kotlin version
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
