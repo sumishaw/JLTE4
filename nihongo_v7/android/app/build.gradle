@@ -8,15 +8,17 @@ android {
 
     namespace 'com.example.nihongolens'
 
-    compileSdkVersion 34
+    // FIX 1: compileSdk must use the integer form (not compileSdkVersion) for AGP 8+
+    compileSdk 34
 
     defaultConfig {
 
         applicationId "com.example.nihongolens"
 
-        minSdkVersion 24
+        // FIX 2: use minSdk / targetSdk (not the deprecated *Version form)
+        minSdk 24
 
-        targetSdkVersion 34
+        targetSdk 34
 
         versionCode 1
 
@@ -39,14 +41,27 @@ android {
 
     compileOptions {
 
-        sourceCompatibility JavaVersion.VERSION_11
+        sourceCompatibility JavaVersion.VERSION_17
 
-        targetCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     kotlinOptions {
+        // FIX 3: must match compileOptions above — Java 11 bytecode with JDK 17
+        jvmTarget = '17'
+    }
 
-        jvmTarget = '11'
+    // FIX 4: packaging block avoids "More than one file was found" duplicate-file errors
+    packagingOptions {
+        resources {
+            excludes += [
+                'META-INF/DEPENDENCIES',
+                'META-INF/LICENSE',
+                'META-INF/LICENSE.txt',
+                'META-INF/NOTICE',
+                'META-INF/NOTICE.txt',
+            ]
+        }
     }
 }
 
@@ -56,11 +71,15 @@ flutter {
 
 dependencies {
 
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.22"
+    // FIX 5: align Kotlin stdlib with the kotlin-android plugin version (1.9.x for Flutter 3.22+)
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
 
     implementation 'androidx.multidex:multidex:2.0.1'
 
     implementation 'com.google.mlkit:translate:17.0.2'
 
     implementation 'com.google.mlkit:language-id:17.0.4'
+
+    // FIX 6: Core KTX required by FlutterActivity on API 34
+    implementation 'androidx.core:core-ktx:1.13.1'
 }
