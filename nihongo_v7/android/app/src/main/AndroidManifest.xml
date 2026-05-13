@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.nihongolens">
 
@@ -9,6 +10,10 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
+    <!--
+        FIX 1: FOREGROUND_SERVICE_SPECIAL_USE requires a matching <property> tag
+        (API 34+). Without it the foreground service throws at runtime.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -19,7 +24,12 @@
         android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
-        android:name="io.flutter.app.FlutterApplication"
+        <!--
+            FIX 2: io.flutter.app.FlutterApplication is DEPRECATED since Flutter 2.
+            Use the bare android.app.Application (or omit the attribute entirely).
+            Keeping the old class causes a NoClassDefFoundError crash on startup.
+        -->
+        android:name="android.app.Application"
         android:label="Caption Translator"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
@@ -80,7 +90,16 @@
             android:name=".OverlayService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+
+            <!--
+                FIX 3: Required <property> for foregroundServiceType="specialUse" on API 34.
+                Without this the OS refuses to start the foreground service.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="caption_overlay" />
+        </service>
 
     </application>
 
