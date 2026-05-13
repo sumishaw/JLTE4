@@ -25,30 +25,24 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <meta-data
-            android:name="flutterEmbedding"
-            android:value="2" />
+        <meta-data android:name="flutterEmbedding" android:value="2" />
 
         <service
             android:name=".CaptionAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="false">
-
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
-
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_config" />
@@ -59,7 +53,6 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
-
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="caption_overlay" />
@@ -67,10 +60,19 @@
 
     </application>
 
-    <!-- KEY FIX: Add com.google.android.as so Android 11+ allows our
-         accessibility service to observe Live Caption's window events -->
+    <!--
+        PACKAGE VISIBILITY (Android 11+)
+        We declare com.google.android.as so the system allows our accessibility
+        service to receive events from the Live Caption overlay window.
+        Because Live Caption works at the OS audio-mixer level, we do NOT need
+        to declare YouTube, VLC, Chrome, etc. — they are irrelevant to the
+        caption source. Any app whose audio Android Live Caption picks up will
+        automatically be covered with no further changes here.
+    -->
     <queries>
+        <!-- Android System Intelligence — hosts the Live Caption overlay -->
         <package android:name="com.google.android.as" />
+        <!-- Kept for intent resolution if user opens these from the app -->
         <package android:name="com.google.android.youtube" />
         <package android:name="com.netflix.mediaclient" />
         <package android:name="org.videolan.vlc" />
