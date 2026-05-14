@@ -1,58 +1,41 @@
-plugins {
-    id 'com.android.application'
-    id 'kotlin-android'
-    id 'dev.flutter.flutter-gradle-plugin'
+// nihongo_v7/android/build.gradle  (ROOT-level, not app/build.gradle)
+
+buildscript {
+    ext.kotlin_version = '1.9.24'
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.3.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
 }
 
-android {
-    namespace 'com.example.nihongolens'
-    compileSdk 34
-
-    defaultConfig {
-        applicationId "com.example.nihongolens"
-        minSdk 26
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-        multiDexEnabled true
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
     }
-
-    buildTypes {
-        release {
-            signingConfig signingConfigs.debug
-            minifyEnabled false
-            shrinkResources false
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = '17'
-    }
-
-    packagingOptions {
-        resources {
-            excludes += [
-                'META-INF/DEPENDENCIES',
-                'META-INF/LICENSE',
-                'META-INF/LICENSE.txt',
-                'META-INF/NOTICE',
-                'META-INF/NOTICE.txt',
-            ]
+    configurations.all {
+        resolutionStrategy.eachDependency { DependencyResolveDetails details ->
+            if (details.requested.group == 'org.jetbrains.kotlin') {
+                details.useVersion kotlin_version
+                details.because 'Enforce uniform Kotlin stdlib version'
+            }
         }
     }
 }
 
-flutter {
-    source '../..'
+rootProject.buildDir = '../build'
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    project.evaluationDependsOn(':app')
 }
 
-dependencies {
-    implementation 'com.google.mlkit:translate:17.0.2'
-    implementation 'com.google.mlkit:language-id:17.0.4'
-    implementation 'androidx.multidex:multidex:2.0.1'
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
 }
