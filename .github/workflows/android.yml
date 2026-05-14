@@ -46,7 +46,15 @@ jobs:
 
       - name: Ensure Android wrapper files exist
         working-directory: nihongo_v7
-        run: flutter create --platforms android . --project-name nihongo_v7
+        run: |
+          # Only regenerate if the gradle wrapper is genuinely absent.
+          # Running `flutter create` unconditionally would overwrite our
+          # pinned gradle-wrapper.properties with Flutter's bundled (older) version.
+          if [ ! -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
+            flutter create --platforms android . --project-name nihongo_v7
+          else
+            echo "Gradle wrapper already present — skipping flutter create."
+          fi
 
       - name: Pin Kotlin version in root build.gradle
         working-directory: nihongo_v7/android
