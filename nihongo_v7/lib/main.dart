@@ -4,14 +4,15 @@ import 'package:flutter/services.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+  runApp(const CaptionTranslatorApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class CaptionTranslatorApp extends StatelessWidget {
+  const CaptionTranslatorApp({super.key});
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Caption Translator',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(scaffoldBackgroundColor: Colors.black),
       home: const HomePage(),
@@ -68,7 +69,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkPermissions();
+    if (state == AppLifecycleState.resumed) { _checkPermissions(); }
   }
 
   Future<void> _checkPermissions() async {
@@ -167,7 +168,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             const Expanded(child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Caption Lens',
+                Text('Caption Translator',
                     style: TextStyle(color: Colors.white, fontSize: 22,
                         fontWeight: FontWeight.bold)),
                 Text('Translates captions from ANY app',
@@ -196,7 +197,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             await platform.invokeMethod('openAccessibilitySettings');
           }),
           const SizedBox(height: 8),
-          _permRow(Icons.picture_in_picture_alt, 'Display over apps',
+          _permRow(Icons.picture_in_picture_alt, 'Overlay Permission',
               'Required to show floating overlay', hasOverlay, () async {
             await platform.invokeMethod('requestOverlayPermission');
           }),
