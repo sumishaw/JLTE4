@@ -78,12 +78,7 @@ jobs:
 
       - name: Make gradlew executable
         working-directory: nihongo_v7/android
-        run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-          else
-            echo "gradlew not present — Flutter will generate it during build."
-          fi
+        run: chmod +x gradlew
 
       - name: Build debug APK
         working-directory: nihongo_v7
